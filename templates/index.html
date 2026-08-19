@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MPログ</title>
+  <style>
+    :root { --bg:#faf9f7; --card:#fff; --ink:#2c2b29; --sub:#8a8780; --accent:#4f9d8f;
+            --lv-excellent:#0ca30c; --lv-safe:#63b863; --lv-caution:#eda100; --lv-danger:#d03b3b; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+           background:var(--bg); color:var(--ink); line-height:1.6; }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1 { font-size: 1.5rem; margin: 0 0 4px; }
+    .date { color: var(--sub); font-size: .9rem; margin-bottom: 20px; }
+    .cal-link { color: var(--accent); text-decoration: none; margin-left: 8px; }
+    .cal-link:hover { text-decoration: underline; }
+
+    .warn { padding: 12px 16px; border-radius: 12px; margin-bottom: 12px; font-size: .92rem;
+            background: #fbf0d8; color: #7a5300; border: 1px solid #eeddb4; }
+    .warn.strong { background: #f9e3e3; color: #8f2626; border-color: #eec3c3; }
+
+    form { display: flex; flex-direction: column; gap: 14px; background: var(--card);
+           padding: 18px; border-radius: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+    .field .name { font-size: .78rem; color: var(--sub); margin-bottom: 6px; }
+    input[type=text], input[type=number], input[type=date] {
+      padding: 10px 12px; border: 1px solid #e3e0da; border-radius: 10px;
+      font-size: 1rem; font-family: inherit; background: #fff; color: var(--ink); }
+    input:focus { outline: none; border-color: var(--accent); }
+
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .pills input { position: absolute; opacity: 0; pointer-events: none; }
+    .pills label { padding: 6px 13px; border-radius: 999px; border: 1px solid #e3e0da;
+                   font-size: .88rem; cursor: pointer; background: #fff; color: var(--sub);
+                   user-select: none; white-space: nowrap; }
+    .pills input:checked + label { border-color: var(--accent); background: #e7f2f0;
+                                   color: #2e6d62; font-weight: 600; }
+    .pills input:checked + label.lv-excellent { background:#e2f5e2; border-color:var(--lv-excellent); color:#0a7a0a; }
+    .pills input:checked + label.lv-safe      { background:#eaf4ea; border-color:var(--lv-safe); color:#3f7d3f; }
+    .pills input:checked + label.lv-caution   { background:#fbf0d8; border-color:var(--lv-caution); color:#9c6a00; }
+    .pills input:checked + label.lv-danger    { background:#f9e3e3; border-color:var(--lv-danger); color:#b03030; }
+    .pills input:checked + label.flag { background:#fbf0d8; border-color:var(--lv-caution); color:#8a5d00; }
+    .pills input:checked + label.flag.crash { background:#f9e3e3; border-color:var(--lv-danger); color:#b03030; }
+    .group { font-size: .7rem; color: var(--sub); margin: 10px 0 5px; }
+    .group:first-of-type { margin-top: 2px; }
+
+    button { padding: 12px 18px; border: none; border-radius: 10px; background: var(--accent);
+             color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; }
+    button:hover { filter: brightness(1.05); }
+
+    h2 { font-size: 1.05rem; margin: 32px 0 10px; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li a { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+           background: var(--card); padding: 12px 16px; border-radius: 12px; margin-bottom: 8px;
+           box-shadow: 0 1px 3px rgba(0,0,0,.04); color: inherit; text-decoration: none; }
+    li a:hover { outline: 1px solid var(--accent); }
+    .d { font-weight: 600; font-size: .88rem; white-space: nowrap; }
+    .chip { font-size: .72rem; padding: 1px 9px; border-radius: 999px; white-space: nowrap; font-weight: 600; }
+    .chip.lv-excellent { background:#e2f5e2; color:#0a7a0a; }
+    .chip.lv-safe      { background:#eaf4ea; color:#3f7d3f; }
+    .chip.lv-caution   { background:#fbf0d8; color:#9c6a00; }
+    .chip.lv-danger    { background:#f9e3e3; color:#b03030; }
+    .icons { font-size: .82rem; white-space: nowrap; }
+    .w, .tags { color: var(--sub); font-size: .78rem; white-space: nowrap; }
+    .note-text { color: var(--sub); font-size: .82rem; flex-basis: 100%; }
+    .empty { color: var(--sub); text-align: center; padding: 24px 0; background: var(--card);
+             border-radius: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>MPログ</h1>
+    <div class="date">今日：{{ today }}
+      <a class="cal-link" href="/calendar">📅 カレンダー</a>
+      <a class="cal-link" href="/insights">📈 ふりかえり</a>
+    </div>
+
+    {% for w in warnings %}
+    <div class="warn {{ w.level }}">⚠️ {{ w.text }}</div>
+    {% endfor %}
+
+    <form action="/logs" method="post">
+      <div class="field">
+        <div class="name">記録する日（変えるとその日の記録を読み込みます）</div>
+        <input type="date" name="log_date" value="{{ selected }}" max="{{ today }}"
+               onchange="if(this.value)location.href='/?d='+this.value">
+      </div>
+
+      <div class="field">
+        <div class="name">残MP見積もり</div>
+        <div class="pills">
+          <input type="radio" id="mp-none" name="mp_level" value=""
+                 {% if not log or not log["mp_level"] %}checked{% endif %}>
+          <label for="mp-none">未入力</label>
+          {% for key, info in mp_levels.items() %}
+          <input type="radio" id="mp-{{ key }}" name="mp_level" value="{{ key }}"
+                 {% if log and log["mp_level"] == key %}checked{% endif %}>
+          <label for="mp-{{ key }}" class="lv-{{ key }}">{{ info.label }}</label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="name">寝起き</div>
+        <div class="pills">
+          <input type="radio" id="wake-none" name="wake_quality" value=""
+                 {% if not log or not log["wake_quality"] %}checked{% endif %}>
+          <label for="wake-none">未入力</label>
+          {% for key, label in wake_qualities.items() %}
+          <input type="radio" id="wake-{{ key }}" name="wake_quality" value="{{ key }}"
+                 {% if log and log["wake_quality"] == key %}checked{% endif %}>
+          <label for="wake-{{ key }}">{{ label }}</label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="name">今日あったこと（タップで切替・自由に足せます）</div>
+
+        {% if frequent_tags %}
+        <div class="group">よく使う</div>
+        <div class="pills">
+          {% for tag in frequent_tags %}
+          <input type="checkbox" id="ft-{{ loop.index }}" name="tags" value="{{ tag }}"
+                 {% if tag in saved_tags %}checked{% endif %}>
+          <label for="ft-{{ loop.index }}">{{ tag }}</label>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if tag_vocab %}
+        <div class="group">登録済み</div>
+        <div class="pills">
+          {% for tag in tag_vocab %}
+          <input type="checkbox" id="vt-{{ loop.index }}" name="tags" value="{{ tag }}"
+                 {% if tag in saved_tags %}checked{% endif %}>
+          <label for="vt-{{ loop.index }}">{{ tag }}</label>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="group">体調・状態（警告とカレンダーに反映されます）</div>
+        <div class="pills">
+          {% for tag in flag_tags %}
+          <input type="checkbox" id="gt-{{ loop.index }}" name="tags" value="{{ tag }}"
+                 {% if tag in saved_tags %}checked{% endif %}>
+          <label for="gt-{{ loop.index }}" class="flag {{ 'crash' if tag == 'クラッシュ' }}">{{ flag_icons[tag] }} {{ tag }}</label>
+          {% endfor %}
+        </div>
+
+        <input type="text" name="tags_free" placeholder="その他（カンマ区切りで自由に）"
+               value="{{ free_tags }}" style="margin-top:10px; width:100%;">
+      </div>
+
+      <div class="field">
+        <div class="name">一言メモ</div>
+        <input type="text" name="note" placeholder="任意。気づいたことがあれば"
+               value="{{ log['note'] if log and log['note'] else '' }}" style="width:100%;">
+      </div>
+
+      <button type="submit">{{ selected }} の記録を保存</button>
+    </form>
+
+    <h2>直近の記録（14日）</h2>
+    <ul>
+      {% for r in recent %}
+      <li>
+        <a href="/?d={{ r['date'] }}">
+          <span class="d">{{ r["date"][5:] }}</span>
+          {% if r["mp_level"] %}
+          <span class="chip lv-{{ r['mp_level'] }}">{{ mp_levels[r["mp_level"]]["label"] }}</span>
+          {% endif %}
+          <span class="icons">
+            {%- if r["crash"] %}⚡{% endif -%}
+            {%- if r["hyperfocus"] %}🌀{% if r["hyperfocus_minutes"] %}{{ r["hyperfocus_minutes"] }}分{% endif %}{% endif -%}
+            {%- if r["bad_dream"] %}😣{% endif -%}
+            {%- if r["walk"] %}🚶{% endif -%}
+          </span>
+          {% if r["weight_kg"] is not none %}<span class="w">{{ r["weight_kg"] }}kg</span>{% endif %}
+          {# 状態タグは左のアイコンで出ているので、ここでは重複させない #}
+          {% set shown = r["activity_tags"].split(",") | reject("in", flag_tags) | list if r["activity_tags"] else [] %}
+          {% if shown %}<span class="tags">{{ shown | join("," ) }}</span>{% endif %}
+          {% if r["note"] %}<span class="note-text">{{ r["note"] }}</span>{% endif %}
+        </a>
+      </li>
+      {% else %}
+      <li class="empty">まだ記録がありません。1項目だけでも保存できます。</li>
+      {% endfor %}
+    </ul>
+  </div>
+</body>
+</html>

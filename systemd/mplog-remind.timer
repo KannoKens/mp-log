@@ -1,0 +1,12 @@
+[Unit]
+Description=MPログ 記録リマインドのスケジュール
+
+[Timer]
+# 朝は残MPの見積もり、夜は1日の振り返り（時刻はここを編集して変える）
+OnCalendar=*-*-* 08:30
+OnCalendar=*-*-* 21:00
+# WSL を落としていて時刻を跨いだ場合、次回起動時に取り返す
+Persistent=true
+
+[Install]
+WantedBy=timers.target

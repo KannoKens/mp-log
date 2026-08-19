@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ふりかえり | MPログ</title>
+  <style>
+    :root { --bg:#faf9f7; --card:#fff; --ink:#2c2b29; --sub:#8a8780; --accent:#4f9d8f;
+            --lv-excellent:#0ca30c; --lv-safe:#63b863; --lv-caution:#eda100; --lv-danger:#d03b3b; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+           background:var(--bg); color:var(--ink); line-height:1.6; }
+    .wrap { max-width: 620px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1 { font-size: 1.5rem; margin: 0 0 4px; }
+    .sub { color: var(--sub); font-size: .9rem; margin-bottom: 20px; }
+    .back-link { color: var(--accent); text-decoration: none; }
+    .back-link:hover { text-decoration: underline; }
+
+    h2 { font-size: 1.05rem; margin: 28px 0 4px; }
+    .lead { color: var(--sub); font-size: .82rem; margin: 0 0 10px; }
+    .card { background: var(--card); padding: 16px 18px; border-radius: 14px;
+            box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+
+    .row { display: grid; grid-template-columns: 82px 1fr 62px; gap: 10px; align-items: center;
+           padding: 7px 0; border-top: 1px solid #f0ede7; }
+    .row:first-child { border-top: none; }
+    .row .k { font-size: .82rem; font-weight: 600; white-space: nowrap; }
+    .row .k .badge { display:block; font-size:.68rem; color:var(--accent); font-weight:600; }
+    .row .v { font-size: .82rem; text-align: right; white-space: nowrap; color: var(--sub); }
+    .row .v b { color: var(--ink); font-size: .92rem; }
+
+    .bar { height: 16px; border-radius: 999px; background: #f0ede7; position: relative; }
+    .bar > span { display: block; height: 100%; border-radius: 999px; }
+    .bar.thin > span { opacity: .45; }
+    .fill-excellent { background: var(--lv-excellent); }
+    .fill-safe      { background: var(--lv-safe); }
+    .fill-caution   { background: var(--lv-caution); }
+    .fill-danger    { background: var(--lv-danger); }
+
+    .marks { font-size: .74rem; color: var(--sub); white-space: nowrap; }
+    .delta { font-size: .74rem; font-weight: 600; }
+    .delta.up { color: #2e7d4f; }
+    .delta.down { color: #b03030; }
+    .n { font-size: .7rem; color: var(--sub); }
+    .n.few { color: #9c6a00; }
+    .empty { color: var(--sub); font-size: .85rem; }
+    .foot { margin-top: 10px; font-size: .74rem; color: var(--sub); }
+
+    .wk { display: grid; grid-template-columns: 92px 1fr auto; gap: 10px; align-items: center;
+          padding: 9px 0; border-top: 1px solid #f0ede7; }
+    .wk:first-child { border-top: none; }
+    .wk.now { background: #f6fbfa; border-radius: 8px; padding-left: 6px; padding-right: 6px; }
+    .wk .w-label { font-size: .8rem; font-weight: 600; white-space: nowrap; }
+    .wk .w-label small { display: block; font-weight: 400; color: var(--sub); font-size: .68rem; }
+    .wk .w-right { text-align: right; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>ふりかえり</h1>
+    <div class="sub">
+      <a class="back-link" href="/">← 入力へ戻る</a>
+      <a class="back-link" href="/calendar" style="margin-left:8px;">📅 カレンダー</a>
+    </div>
+
+    {% if stats.days %}
+    <p class="lead">
+      記録 {{ stats.days }}日分（{{ stats.first }} 〜 {{ stats.last }}）。
+      うち残MPの記入があるのは {{ stats.mp_days }}日。
+    </p>
+    {% endif %}
+
+    <h2>週ごとの推移</h2>
+    <p class="lead">
+      平均MPは4択を代表値（絶好調17／安全圏10／やや注意7／危険3）に直した平均です。
+      横の増減は前の週との差で、両方の週が3日以上記録されているときだけ出ます。
+    </p>
+    <div class="card">
+      {% for w in summary %}
+      <div class="wk {% if w.current %}now{% endif %}">
+        <div class="w-label">
+          {{ w.label }}
+          <small>{{ w.logged }}/7日{% if w.current %}・今週{% endif %}</small>
+        </div>
+        <div class="bar {% if w.sparse %}thin{% endif %}">
+          {% if w.avg_mp is not none %}
+          <span class="fill-{{ w.band }}" style="width: {{ (w.avg_mp / max_mp * 100) | round(1) }}%"></span>
+          {% endif %}
+        </div>
+        <div class="w-right">
+          {% if w.avg_mp is not none %}
+            <b style="font-size:.88rem;">{{ w.avg_mp }}</b>
+            {% if w.delta is not none and w.delta != 0 %}
+            <span class="delta {{ 'up' if w.delta > 0 else 'down' }}">{{ '+' if w.delta > 0 }}{{ w.delta }}</span>
+            {% endif %}
+          {% else %}
+            <span class="n">—</span>
+          {% endif %}
+          <div class="marks">
+            {%- if w.crash %}⚡{{ w.crash }} {% endif -%}
+            {%- if w.hyperfocus %}🌀{{ w.hyperfocus }} {% endif -%}
+            {%- if w.bad_wake %}😴{{ w.bad_wake }} {% endif -%}
+            {%- if w.bad_dream %}😣{{ w.bad_dream }} {% endif -%}
+            {%- if w.walk %}🚶{{ w.walk }}{% endif -%}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+      <div class="foot">⚡クラッシュ 🌀没頭 😴寝起き悪い 😣苦しい夢 🚶散歩（いずれもその週の日数）</div>
+    </div>
+
+    <h2>寝起き → その日のMP</h2>
+    <p class="lead">「寝起きの悪い朝は決壊しやすい」仮説の検証。</p>
+    <div class="card">
+      {% for r in wake.same_day %}
+      <div class="row">
+        <div class="k">{{ r.label }}</div>
+        <div class="bar {% if not r.enough %}thin{% endif %}">
+          {% if r.avg is not none %}
+          <span class="fill-{{ r.band }}" style="width: {{ (r.avg / max_mp * 100) | round(1) }}%"></span>
+          {% endif %}
+        </div>
+        <div class="v">
+          {% if r.avg is not none %}<b>{{ r.avg }}</b>{% else %}—{% endif %}
+          <div class="n {% if not r.enough %}few{% endif %}">n={{ r.n }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <h2>寝起き → 翌日のMP</h2>
+    <p class="lead">前日の寝起きが翌日まで尾を引くかどうか。翌日にも記録がある日だけを数えています。</p>
+    <div class="card">
+      {% for r in wake.next_day %}
+      <div class="row">
+        <div class="k">{{ r.label }}</div>
+        <div class="bar {% if not r.enough %}thin{% endif %}">
+          {% if r.avg is not none %}
+          <span class="fill-{{ r.band }}" style="width: {{ (r.avg / max_mp * 100) | round(1) }}%"></span>
+          {% endif %}
+        </div>
+        <div class="v">
+          {% if r.avg is not none %}<b>{{ r.avg }}</b>{% else %}—{% endif %}
+          <div class="n {% if not r.enough %}few{% endif %}">n={{ r.n }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <h2>活動タグ別のMP</h2>
+    <p class="lead">その活動をした日のMP平均。何が削っているかの当たりをつける用です。</p>
+    <div class="card">
+      {% for t in tags %}
+      <div class="row">
+        <div class="k">{{ t.tag }}</div>
+        <div class="bar {% if not t.enough %}thin{% endif %}">
+          <span class="fill-{{ t.band }}" style="width: {{ (t.avg / max_mp * 100) | round(1) }}%"></span>
+        </div>
+        <div class="v">
+          <b>{{ t.avg }}</b>
+          <div class="n {% if not t.enough %}few{% endif %}">n={{ t.n }}</div>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">活動タグつきの記録がまだありません。</div>
+      {% endfor %}
+    </div>
+
+    <h2>体重の推移</h2>
+    <div class="card">
+      {% if weights | length >= 2 %}
+      {% set ws = weights | map(attribute='weight') | list %}
+      {% set lo = ws | min %}{% set hi = ws | max %}
+      {% set span = (hi - lo) if (hi - lo) > 0 else 1 %}
+      <svg viewBox="0 0 300 90" preserveAspectRatio="none" style="width:100%; height:90px;">
+        <polyline fill="none" stroke="var(--accent)" stroke-width="2"
+          points="{% for p in weights %}{{ (loop.index0 / (weights|length - 1) * 296 + 2) | round(1) }},{{ (78 - (p.weight - lo) / span * 68) | round(1) }} {% endfor %}" />
+      </svg>
+      <div class="row" style="border-top:1px solid #f0ede7;">
+        <div class="k">{{ weights[0].date[5:] }} 〜 {{ weights[-1].date[5:] }}</div>
+        <div class="marks">最小 {{ lo }}kg ／ 最大 {{ hi }}kg</div>
+        <div class="v"><b>{{ weights[-1].weight }}kg</b></div>
+      </div>
+      {% elif weights | length == 1 %}
+      <div class="empty">記録は1日分（{{ weights[0].date }}・{{ weights[0].weight }}kg）だけです。推移を見るにはもう数日必要です。</div>
+      {% else %}
+      <div class="empty">体重の記録がまだありません。入力フォームの「体重」に数値を入れた日から推移が出ます。</div>
+      {% endif %}
+    </div>
+
+    <div class="foot">
+      n が {{ min_samples }} 未満の項目は薄く表示しています。数日分の平均は偶然で動くので、
+      傾向として読まずに参考値として扱ってください。
+    </div>
+  </div>
+</body>
+</html>

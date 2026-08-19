@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+mplog.db
+config.py
+seed.py
+SPEC.md
+NOTES.local.md
+*:Zone.Identifier
+
+# Claude Code のスキル。個人のメモのファイルパスに依存していて汎用化できていないため
+# 公開しない。実体はここに置いたまま ~/.claude/skills/ から symlink する
+# （git の追跡有無は symlink の動作に無関係）。
+skills/
+
+# 公開用コピーへの同期スクリプト（手元の運用専用）
+sync-public.sh
