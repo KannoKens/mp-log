@@ -1,0 +1,9 @@
+# テストを走らせるための依存。実行だけなら要らないので requirements.txt と分ける
+# （systemd で常駐させる環境に pytest を入れる理由がない）。
+-r requirements.txt
+
+pytest==9.1.1
+
+# FastAPI の TestClient（starlette.testclient）が httpx を要求する。
+# httpx 自体をアプリのコードでは使わないので、こちらに置く。
+httpx==0.28.1

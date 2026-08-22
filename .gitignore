@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 mplog.db
 config.py
 seed.py

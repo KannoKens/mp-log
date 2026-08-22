@@ -53,7 +53,7 @@ echo "MPログ 導線セットアップ ($REPO_DIR)"
 # --- 前提チェック ---------------------------------------------------------
 if [ ! -x "$REPO_DIR/.venv/bin/uvicorn" ]; then
     warn ".venv/bin/uvicorn が見つかりません。先に依存をインストールしてください:"
-    info "python3 -m venv .venv && .venv/bin/pip install fastapi 'uvicorn[standard]' jinja2 python-multipart"
+    info "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
     exit 1
 fi
 if ! systemctl --user show-environment >/dev/null 2>&1; then

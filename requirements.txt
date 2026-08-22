@@ -1,22 +1,20 @@
-annotated-doc==0.0.5
-annotated-types==0.8.0
-anyio==4.14.2
-click==8.4.2
+# 実行に必要な「直接依存」だけを書く。推移的な依存（starlette, pydantic, anyio …）は
+# pip が解決するので載せない。pip freeze をそのまま貼ると、どれが自分で選んだ依存で
+# どれが巻き添えで入ったのかが後から区別できなくなる。
+#
+# 版は固定する。個人用の小さなアプリなので、ある日突然動かなくなったときに
+# 「依存が勝手に上がった」可能性を最初に消せるほうが得。
+# 上げるときは requirements-dev.txt を入れてテストを通してから。
+
 fastapi==0.141.1
-h11==0.16.0
-httptools==0.8.0
-idna==3.19
-Jinja2==3.1.6
-MarkupSafe==3.0.3
-pydantic==2.13.4
-pydantic_core==2.46.4
-python-dotenv==1.2.3
+
+# [standard] は uvloop / httptools / watchfiles を連れてくる。
+# systemd から `uvicorn main:app` で常駐させるだけなら素の uvicorn でも足りるが、
+# 開発時の --reload が watchfiles 依存なので standard 側に寄せてある。
+uvicorn[standard]==0.52.4
+
+# テンプレート描画（templates/*.html）。FastAPI 本体は Jinja2 を要求しないので明示が要る。
+jinja2==3.1.6
+
+# POST /logs は multipart/form-data。これが無いと FastAPI の Form(...) が起動時に落ちる。
 python-multipart==0.0.32
-PyYAML==6.0.3
-starlette==1.6.0
-typing-inspection==0.4.4
-typing_extensions==4.16.0
-uvicorn==0.52.4
-uvloop==0.22.1
-watchfiles==1.2.0
-websockets==17.0.1

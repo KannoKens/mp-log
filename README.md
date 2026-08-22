@@ -25,6 +25,7 @@
 | バックエンド | Python / FastAPI |
 | DB | SQLite |
 | フロント | Jinja2 テンプレート + 素の HTML/CSS |
+| テスト / CI | pytest + GitHub Actions |
 | AI（予定） | Claude API（一言フィードバック） |
 
 ## 開発状況
@@ -37,6 +38,7 @@
 - [x] 日々使う導線（常駐サーバ・`mplog` コマンド・朝夜のリマインド通知）
 - [x] ふりかえりページ（`GET /insights`。週次サマリ＋相関ビュー）
 - [x] 活動ごとの消費MP記録（`activities` テーブル）
+- [x] テスト（pytest・84件）と CI（GitHub Actions）
 - [ ] `activities` の Web 表示・入力（今は DB 直・`/insights` にはまだ出していない）
 - [ ] AI による一言フィードバック
 
@@ -48,7 +50,7 @@
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install fastapi "uvicorn[standard]" jinja2 python-multipart
+pip install -r requirements.txt
 
 # 個人用の設定・データ（任意。無くても汎用のデフォルトで動く）
 cp config.example.py config.py   # 活動タグを自分用に編集
@@ -59,6 +61,43 @@ uvicorn main:app --reload
 ```
 
 ブラウザで http://127.0.0.1:8000 を開く。
+
+## テスト
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+**何をテストしているか** — 「SQL が動くこと」ではなく、**判断のルール**を固定している。
+このアプリの本体は集計ロジックではなく「少ないデータで断定させない」という方針のほうで、
+そこはコードを読んでも意図が分かりにくく、うっかり単純化されると
+体調の判断材料が静かに壊れる。
+
+| 対象 | 固定していること |
+|---|---|
+| `db.py` | 週平均は**記録3日以上の週だけ**／記録の薄い週を挟んだら前週差の比較を打ち切る／`enough` は**5件から**／消費MPは **0 と未記録を区別する**（0埋めしない）／見積もりの語彙(1/3/5)を増やせない |
+| `main.py` | 語彙外の入力を捨てる／タグからフラグを立てる／**フォームに無い項目（体重・没頭分数）を再保存で消さない**／記録ゼロでも全ページが描ける |
+| `remind.py` | **記録済みの日は何も言わない**／Windows 側を叩けない環境では黙って諦める |
+
+しきい値は定数（`MIN_WEEK_DAYS` 等）から引かずに**直書き**してある。
+定数を参照して組むと「閾値がいくつでも通るテスト」になり、変更を検出できないため。
+実際、最初に書いたときはこれで素通りしていて、コードをわざと壊す確認で気づいた。
+
+テストは DB パスを一時ファイルに差し替える fixture を **autouse** にしている。
+このアプリの DB はリポジトリ直下の `mplog.db` 固定なので、fixture を
+要求し忘れたテストが1つでもあると**実際の記録を書き換えてしまう**。
+
+## CI
+
+GitHub Actions（[.github/workflows/ci.yml](.github/workflows/ci.yml)）で、push・PR・週1で回している。
+
+- `pytest`
+- **uvicorn で実際に起動して全ページを叩く** — `import` できることと
+  「サーバとして応答すること」は別なので、TestClient とは分けて確かめる
+- **`remind.py` を依存を何も入れていない venv で動かす** — systemd の timer は
+  venv を通さずシステムの `python3` で叩くので、「標準ライブラリのみ」という
+  前提が崩れていないかを検証する。fastapi が入った環境で動かしても意味がない
 
 ## 入力はタグに一本化している
 
