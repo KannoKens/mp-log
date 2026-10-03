@@ -157,6 +157,47 @@ def test_save_log_falls_back_to_today_on_broken_date(client, today):
     assert db.get_log(today.isoformat()) is not None
 
 
+# ------------------------------------------------------ 保存 → 消費MPの記録
+
+def test_save_log_records_mp_from_tags(client, days_ago, monkeypatch):
+    """ボタンのタグは表の値、自由記入の「タグ:MP」はその値で activities に入る。"""
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2, "運動": 3})
+    day = days_ago(0)
+
+    _post(client, log_date=day, tags=["家事", "運動"], tags_free="面接:5, 運動：1, 読書")
+
+    rows = {r["activity"]: (r["mp_cost"], r["source"]) for r in db.list_activities(day)}
+    assert rows == {"家事": (2, "table"), "運動": (1, "web"), "面接": (5, "web")}
+    assert db.get_log(day)["activity_tags"] == "家事,運動,面接,読書", "タグ欄にはMPを残さない"
+
+
+def test_save_log_warns_on_bad_cost_but_keeps_tag(client, days_ago):
+    day = days_ago(0)
+    res = _post(client, log_date=day, tags_free="面接:9")
+
+    assert "bad=" in res.headers["location"]
+    assert db.get_log(day)["activity_tags"] == "面接"
+    assert db.list_activities(day) == [], "範囲外のMPは記録しない"
+    assert "のMPは" in client.get(res.headers["location"]).text
+
+
+def test_index_restores_manual_cost_in_free_text(client, days_ago, monkeypatch):
+    """再編集で「面接:5」が欄に戻ること。戻らないと次の保存で手入力が消える。"""
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2})
+    day = days_ago(0)
+    _post(client, log_date=day, tags=["家事"], tags_free="面接:5, 家事:3")
+
+    text = client.get("/", params={"d": day}).text
+
+    assert 'value="面接:5,家事:3"' in text  # プレースホルダーの例文と区別するため value で見る
+    assert "消費MP 合計 8" in text
+
+
+def test_insights_rejects_out_of_range_days(client):
+    assert client.get("/insights", params={"days": 6}).status_code == 422
+    assert client.get("/insights", params={"days": 61}).status_code == 422
+
+
 # ------------------------------------------------------------------ API
 
 def test_api_logs_returns_all_rows_newest_first(client, add_log, days_ago):

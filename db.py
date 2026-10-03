@@ -7,7 +7,9 @@ str をそのまま Unicode として保存するので明示のエンコード�
 外部ファイル入出力を足すときは encoding='utf-8' を必ず付けること）。
 """
 
+import re
 import sqlite3
+import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -23,6 +25,8 @@ MP_LEVELS: dict[str, dict] = {
 }
 
 WAKE_QUALITIES: dict[str, str] = {"good": "良い", "normal": "普通", "bad": "悪い"}
+
+WEEKDAY_JA = ["月", "火", "水", "木", "金", "土", "日"]  # date.weekday() の順
 
 # /today が候補に付ける「見積もり」の語彙（MP1/MP3/MP5）。見積もりと実測を
 # 同じ物差しで並べて較正するのが目的なので、ここは勝手に増やさない。
@@ -49,6 +53,26 @@ try:
     from config import TAG_MP_COSTS  # 個人設定（.gitignore 済み・公開しない）
 except ImportError:
     TAG_MP_COSTS: dict[str, int] = {}
+
+# activities.source のうち、Webフォームの保存で作り直す（＝フォームが持ち主の）行。
+#   'table' … TAG_MP_COSTS から引いた固定値
+#   'web'   … 自由記入で「面接:5」と書いた値（その日だけ有効。表には覚えさせない）
+# これ以外（'session-close' / 'manual'）は実測で、フォームからは一切触らない。
+FORM_SOURCES = ("table", "web")
+
+SOURCE_LABELS = {"table": "表", "web": "手入力"}  # 無いものは「実測」
+
+# Webの保存で消費MPを起こし始める日（YYYY-MM-DD）。これより前の日は編集しても
+# activities に触らない。既に記録が溜まっている環境で、過去の日合計が後から
+# 変わらないようにするための設定。空文字なら制限なし（新規に使い始めるならこれでよい）。
+try:
+    from config import FORM_SYNC_SINCE  # 個人設定（.gitignore 済み・公開しない）
+except ImportError:
+    FORM_SYNC_SINCE = ""
+
+
+def source_label(source: str | None) -> str:
+    return SOURCE_LABELS.get(source or "", "実測")
 
 # 集計でこの件数未満のグループは「参考値」扱いにする。数日分の平均を
 # 傾向として断定すると、体調の判断材料としてかえって有害なため。
@@ -93,6 +117,27 @@ def normalize_tag(tag: str) -> str:
     """表記ゆれを正規のタグ名に直す。"""
     tag = tag.strip()
     return TAG_ALIASES.get(tag, tag)
+
+
+# 自由記入の「面接:5」「家事：3」「散歩=1」。区切りの無い「面接5」は受けない
+# （「ABC123」のような名前と区別がつかないため）。
+_TAG_COST_RE = re.compile(r"^(.+?)\s*[:：=＝]\s*(\S*)$")
+
+
+def parse_tag_cost(raw: str) -> tuple[str, int | None, bool]:
+    """自由記入の1要素を (タグ名, 消費MP, 不正だったか) に分ける。
+
+    MPが範囲外・数字でないときは、タグだけ活かして MP は捨て、不正フラグを立てる。
+    丸めないのは、打ち間違いに気づけなくなるため。
+    """
+    m = _TAG_COST_RE.match(raw.strip())
+    if not m:
+        return normalize_tag(raw), None, False
+    tag = normalize_tag(m.group(1))
+    num = unicodedata.normalize("NFKC", m.group(2))
+    if num.isdigit() and MP_COST_MIN <= int(num) <= MP_COST_MAX:
+        return tag, int(num), False
+    return tag, None, True
 
 
 def flags_from_tags(tags: list[str]) -> dict[str, int]:
@@ -242,6 +287,10 @@ def add_activity(
     上書きにしているのは、1日に何度も記録したときや、後から MP を直した
     ときに同じ行が増えないようにするため。別物として2件残したいときは
     activity 名を変える（例:「資料作成 下書き」「資料作成 仕上げ」）。
+
+    実測（source が FORM_SOURCES 以外）を tag 付きで書くと、同じ日・同じタグの
+    表／手入力の行は消す。Webで保存した時点で表の行が先に入っているので、
+    消さないと同じ活動を二重に数えてしまう。実測があれば実測を使う。
     """
     if not MP_COST_MIN <= mp_cost <= MP_COST_MAX:
         raise ValueError(
@@ -250,6 +299,12 @@ def add_activity(
         raise ValueError(
             f"mp_estimated は {sorted(MP_COSTS)} のいずれか: {mp_estimated}")
     with get_conn() as conn:
+        if tag and source not in FORM_SOURCES:
+            conn.execute(
+                "DELETE FROM activities WHERE date = ? AND tag = ? AND activity != ? "
+                "AND source IN (?, ?)",
+                (log_date, tag, activity, *FORM_SOURCES),
+            )
         row = conn.execute(
             "SELECT id FROM activities WHERE date = ? AND activity = ?",
             (log_date, activity),
@@ -310,6 +365,73 @@ def fill_from_tags(log_date: str) -> list[dict]:
         add_activity(log_date, row["activity"], row["mp_cost"],
                      tag=row["tag"], source="table")
     return proposed
+
+
+def sync_form_activities(log_date: str, tags: list[str],
+                         explicit: dict[str, int]) -> None:
+    """Webフォームの保存時に、その日の 'table'/'web' 行をタグに合わせて揃える。
+
+    書き足すのではなく揃える: タグを外せばその行も消える。同じ日を何度保存しても
+    結果は同じになるので、過去の日の編集にもそのまま使える。
+    タグごとの消費MPは「実測 > 手入力（explicit）> 表（TAG_MP_COSTS）」の順で決め、
+    どれも無いタグは行を作らない（推測で埋めない）。実測の行には触らない。
+    FORM_SYNC_SINCE より前の日は何もしない。
+    """
+    if FORM_SYNC_SINCE and log_date < FORM_SYNC_SINCE:
+        return
+    existing = list_activities(log_date)
+    measured = ({r["tag"] for r in existing if r["source"] not in FORM_SOURCES}
+                | {r["activity"] for r in existing if r["source"] not in FORM_SOURCES})
+
+    desired: dict[str, tuple[int, str]] = {}
+    for tag in tags:
+        if tag in measured:
+            continue
+        if tag in explicit:
+            desired[tag] = (explicit[tag], "web")
+        elif tag in TAG_MP_COSTS:
+            desired[tag] = (TAG_MP_COSTS[tag], "table")
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as conn:
+        kept: set[str] = set()
+        for r in existing:
+            if r["source"] not in FORM_SOURCES:
+                continue
+            if r["tag"] not in desired or r["tag"] in kept:
+                conn.execute("DELETE FROM activities WHERE id = ?", (r["id"],))
+                continue
+            cost, source = desired[r["tag"]]
+            conn.execute("UPDATE activities SET mp_cost = ?, source = ? WHERE id = ?",
+                         (cost, source, r["id"]))
+            kept.add(r["tag"])
+        for tag, (cost, source) in desired.items():
+            if tag not in kept:
+                conn.execute(
+                    "INSERT INTO activities (date, activity, mp_cost, tag, source, "
+                    "created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (log_date, tag, cost, tag, source, now),
+                )
+
+
+def web_costs(log_date: str) -> dict[str, int]:
+    """その日に自由記入で書いたMP（'web' 行）をタグ → MP で返す。フォームの復元用。"""
+    return {r["tag"]: r["mp_cost"] for r in list_activities(log_date)
+            if r["source"] == "web"}
+
+
+def day_breakdown(log_date: str) -> dict:
+    """その日の活動と、出所別（実測／手入力／表）の消費MP合計を返す。"""
+    rows = list_activities(log_date)
+    totals = {"実測": 0, "手入力": 0, "表": 0}
+    items = []
+    for r in rows:
+        label = source_label(r["source"])
+        totals[label] += r["mp_cost"]
+        items.append({"activity": r["activity"], "mp_cost": r["mp_cost"],
+                      "source": label})
+    return {"items": items, "totals": totals,
+            "total": sum(totals.values()) if rows else None}
 
 
 def list_activities(log_date: str) -> list[sqlite3.Row]:
@@ -592,6 +714,96 @@ def daily_mp_spent(days: int = 14) -> list[dict]:
     return [{"date": r["date"], "spent": r["spent"], "n": r["n"],
              "minutes": r["minutes"], "mp_level": r["mp_level"],
              "mp_value": mp_value(r["mp_level"])} for r in rows]
+
+
+def daily_mp_spent_series(days: int = 14) -> dict:
+    """直近 `days` 日の消費MPを、暦の抜けを埋めた古い順の系列で返す（グラフ用）。
+
+    `daily_mp_spent` は /today 用で、活動が1件も無い日は**行ごと落ちる**。グラフは
+    横軸が暦なので抜けを埋める必要があるが、⚠ **未記録を 0 で埋めない**。
+    「使わなかった日」と「記録し忘れた日」を同じ高さ（0）の棒で描くと、後から
+    区別がつかなくなる。未記録の日は `spent=None` で返し、棒を描かせない。
+
+    その日の残MP（`mp_level` の代表値）も一緒に返す。消費と残MPは尺度を揃えて
+    あるので（MP_COST_MIN の注記を参照）、同じ軸に重ねて比べてよい。
+    `over` は「その日の残MPを消費が超えた」＝使いすぎた日の印。
+
+    消費は出所別（実測／手入力／表）にも分けて返す。Webで保存しただけで表の
+    固定値が入るようになったので、合計のうちどれだけが実測でないかを見えるように
+    しておかないと、固定値の多い日を「消耗した日」と読み違える。
+    """
+    today = date.today()
+    start = today - timedelta(days=days - 1)
+    with get_conn() as conn:
+        spent_rows = conn.execute(
+            "SELECT date, SUM(mp_cost) spent, COUNT(*) n, SUM(minutes) minutes, "
+            "       SUM(CASE WHEN source = 'web' THEN mp_cost ELSE 0 END) web, "
+            "       SUM(CASE WHEN source = 'table' THEN mp_cost ELSE 0 END) tbl "
+            "FROM activities WHERE date >= ? GROUP BY date",
+            (start.isoformat(),),
+        ).fetchall()
+        log_rows = conn.execute(
+            "SELECT date, mp_level FROM daily_logs WHERE date >= ?",
+            (start.isoformat(),),
+        ).fetchall()
+    spent_by = {r["date"]: r for r in spent_rows}
+    level_by = {r["date"]: r["mp_level"] for r in log_rows}
+
+    series = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        row = spent_by.get(d.isoformat())
+        spent = row["spent"] if row else None
+        capacity = mp_value(level_by.get(d.isoformat()))
+        over = spent is not None and capacity is not None and spent > capacity
+        # 棒は「残MPの範囲内で使った分」と「超過分」の2段にする。超えた日を
+        # 丸ごと警告色にすると、実データでは大半の日が警告色になって意味を失う。
+        excess = spent - capacity if over else 0
+        series.append(
+            {
+                "date": d.isoformat(),
+                "label": f"{d.month}/{d.day}",
+                "day": d.day,
+                "weekday": WEEKDAY_JA[d.weekday()],
+                "spent": spent,
+                "measured": spent - row["web"] - row["tbl"] if row else None,
+                "web": row["web"] if row else None,
+                "table": row["tbl"] if row else None,
+                "n": row["n"] if row else 0,
+                "minutes": row["minutes"] if row else None,
+                "mp_level": level_by.get(d.isoformat()),
+                "capacity": capacity,
+                "over": over,
+                "base": None if spent is None else spent - excess,
+                "excess": excess,
+                "today": d == today,
+            }
+        )
+
+    values = [s["spent"] for s in series if s["spent"] is not None]
+    caps = [s["capacity"] for s in series if s["capacity"] is not None]
+    # 軸の上限は5刻みで切り上げる。安全圏(10)は常に軸に入れて、
+    # 記録が少ない時期でも「10を超えたか」が同じ位置で読めるようにする。
+    top = max(values + caps + [MP_LEVELS["safe"]["value"]])
+    scale = -(-top // 5) * 5
+    peak = max(values) if values else None
+    # 記録が0件のとき peak は None。`spent == peak` で探すと未記録の日（spent=None）が
+    # 引っかかるので、peak がある場合だけ探す
+    peak_day = next((s for s in series if peak is not None and s["spent"] == peak), None)
+    return {
+        "days": series,
+        "scale": scale,
+        "ticks": [scale, scale // 2, 0],  # 上から下へ（描画順）
+        "logged": len(values),
+        "avg": _avg(values),
+        "peak": peak,
+        "peak_date": peak_day["date"] if peak_day else None,
+        "peak_label": peak_day["label"] if peak_day else None,
+        "over_days": sum(1 for s in series if s["over"]),
+        # 期間の消費のうち表の固定値が占める割合（%）。実測でない分の目安
+        "table_share": round(100 * sum(s["table"] for s in series if s["table"])
+                             / sum(values)) if values and sum(values) else None,
+    }
 
 
 def estimate_accuracy(days: int = 90) -> dict:

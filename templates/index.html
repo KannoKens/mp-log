@@ -41,6 +41,20 @@
     .pills input:checked + label.lv-danger    { background:#f9e3e3; border-color:var(--lv-danger); color:#b03030; }
     .pills input:checked + label.flag { background:#fbf0d8; border-color:var(--lv-caution); color:#8a5d00; }
     .pills input:checked + label.flag.crash { background:#f9e3e3; border-color:var(--lv-danger); color:#b03030; }
+    .pills label .cost { font-size: .7rem; margin-left: 4px; opacity: .7; font-variant-numeric: tabular-nums; }
+    .hint { font-size: .72rem; color: var(--sub); margin-top: 5px; }
+    .spent { margin-top: 14px; background: var(--card); padding: 14px 18px; border-radius: 14px;
+             box-shadow: 0 1px 4px rgba(0,0,0,.05); font-size: .85rem; }
+    .spent .total { font-weight: 600; }
+    .spent .total small { font-weight: 400; color: var(--sub); margin-left: 6px; }
+    .spent ul { margin-top: 6px; }
+    .spent li { display: flex; gap: 10px; padding: 3px 0; border-top: 1px solid #f0ede7; }
+    .spent li:first-child { border-top: none; }
+    .spent li .a { flex: 1; }
+    .spent li .m { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .src { font-size: .68rem; padding: 0 7px; border-radius: 999px; background: #f0ede7; color: var(--sub);
+           white-space: nowrap; align-self: center; }
+    .src.実測 { background: #e7f2f0; color: #2e6d62; }
     .group { font-size: .7rem; color: var(--sub); margin: 10px 0 5px; }
     .group:first-of-type { margin-top: 2px; }
 
@@ -78,6 +92,10 @@
     {% for w in warnings %}
     <div class="warn {{ w.level }}">⚠️ {{ w.text }}</div>
     {% endfor %}
+    {% if bad %}
+    <div class="warn">⚠️ {{ bad }} のMPは {{ mp_cost_min }}〜{{ mp_cost_max }} の数字で書いてください。
+      タグだけ保存し、MPは記録していません。</div>
+    {% endif %}
 
     <form action="/logs" method="post">
       <div class="field">
@@ -123,7 +141,7 @@
           {% for tag in frequent_tags %}
           <input type="checkbox" id="ft-{{ loop.index }}" name="tags" value="{{ tag }}"
                  {% if tag in saved_tags %}checked{% endif %}>
-          <label for="ft-{{ loop.index }}">{{ tag }}</label>
+          <label for="ft-{{ loop.index }}">{{ tag }}{% if tag in tag_costs %}<span class="cost">·{{ tag_costs[tag] }}</span>{% endif %}</label>
           {% endfor %}
         </div>
         {% endif %}
@@ -134,7 +152,7 @@
           {% for tag in tag_vocab %}
           <input type="checkbox" id="vt-{{ loop.index }}" name="tags" value="{{ tag }}"
                  {% if tag in saved_tags %}checked{% endif %}>
-          <label for="vt-{{ loop.index }}">{{ tag }}</label>
+          <label for="vt-{{ loop.index }}">{{ tag }}{% if tag in tag_costs %}<span class="cost">·{{ tag_costs[tag] }}</span>{% endif %}</label>
           {% endfor %}
         </div>
         {% endif %}
@@ -148,8 +166,10 @@
           {% endfor %}
         </div>
 
-        <input type="text" name="tags_free" placeholder="その他（カンマ区切りで自由に）"
+        <input type="text" name="tags_free" placeholder="その他（カンマ区切り。「面接:5」のようにMPも書けます）"
                value="{{ free_tags }}" style="margin-top:10px; width:100%;">
+        <div class="hint">·数字はタグの消費MP（表の値）。「家事:3」と書くとその日だけ上書きできます。
+          MP（{{ mp_cost_min }}〜{{ mp_cost_max }}）が分からないタグは消費MPに入りません。</div>
       </div>
 
       <div class="field">
@@ -160,6 +180,21 @@
 
       <button type="submit">{{ selected }} の記録を保存</button>
     </form>
+
+    {% if day.items %}
+    <div class="spent">
+      <div class="total">{{ selected[5:] }} の消費MP 合計 {{ day.total }}
+        <small>実測 {{ day.totals["実測"] }} ／ 手入力 {{ day.totals["手入力"] }} ／ 表 {{ day.totals["表"] }}</small>
+      </div>
+      <ul>
+        {% for a in day["items"] %}
+        <li><span class="a">{{ a.activity }}</span>
+          <span class="src {{ a.source }}">{{ a.source }}</span>
+          <span class="m">{{ a.mp_cost }}</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
 
     <h2>直近の記録（14日）</h2>
     <ul>

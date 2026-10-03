@@ -3,9 +3,9 @@
 
 今の機能:
   - GET  /          入力フォーム（?d=YYYY-MM-DD で過去日も編集可）＋直近の一覧＋警告表示
-  - POST /logs      1日分を保存（UPSERT）→ その日の / にリダイレクト
+  - POST /logs      1日分を保存（UPSERT）＋タグから消費MPを起こす → その日の / にリダイレクト
   - GET  /calendar  カレンダーヒートマップ（mp_level で色分け・crash マーカー）
-  - GET  /insights  ふりかえり（週次サマリ＋寝起き・活動タグとMPの関係）
+  - GET  /insights  ふりかえり（日ごとの消費MP＋週次サマリ＋寝起き・活動タグとMPの関係）
   - GET  /api/logs  全件を JSON で返す
 
 まだ入れていない（次の段階）: Claude API での一言フィードバック。
@@ -13,6 +13,7 @@
 
 from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import RedirectResponse
@@ -58,7 +59,7 @@ def _warnings(today: str) -> list[dict]:
 
 
 @app.get("/")
-def index(request: Request, d: str | None = None):
+def index(request: Request, d: str | None = None, bad: str | None = None):
     today = date.today().isoformat()
     selected = _valid_date(d) or today
     log = db.get_log(selected)
@@ -75,6 +76,13 @@ def index(request: Request, d: str | None = None):
     vocab = [t for t in db.ACTIVITY_TAGS if t not in frequent]
     buttoned = set(frequent) | set(vocab) | set(db.FLAG_TAGS)
     free_tags = [t for t in saved_tags if t not in buttoned]
+
+    # 手入力したMPは自由記入欄に「面接:5」の形で戻す。ボタンのタグに付けた
+    # MP（表の値の上書き）も同じ欄に出す。消すとその日の手入力も消える
+    manual = db.web_costs(selected)
+    free_tags = [f"{t}:{manual[t]}" if t in manual else t for t in free_tags]
+    free_tags += [f"{t}:{c}" for t, c in manual.items()
+                  if t in buttoned and t in saved_tags]
 
     return templates.TemplateResponse(
         request=request,
@@ -93,6 +101,11 @@ def index(request: Request, d: str | None = None):
             "tag_vocab": vocab,
             "flag_tags": db.FLAG_TAGS,
             "flag_icons": db.FLAG_TAG_ICONS,
+            "tag_costs": db.TAG_MP_COSTS,
+            "day": db.day_breakdown(selected),
+            "bad": bad,
+            "mp_cost_min": db.MP_COST_MIN,
+            "mp_cost_max": db.MP_COST_MAX,
         },
     )
 
@@ -108,12 +121,27 @@ def save_log(
 ):
     target = _valid_date(log_date) or date.today().isoformat()
 
-    # ボタン＋自由記入をカンマ区切りに正規化（読点区切りも許容）
+    # ボタン＋自由記入をカンマ区切りに正規化（読点区切りも許容）。
+    # 自由記入は「面接:5」のように消費MPを添えられる。MPは activities にだけ書き、
+    # タグ欄には名前だけ残す（よく使うタグの集計などを今の語彙のまま使うため）
     tag_list: list[str] = []
-    for raw in list(tags) + tags_free.replace("、", ",").split(","):
-        t = db.normalize_tag(raw)
-        if t and t not in tag_list:
+    explicit: dict[str, int] = {}
+    bad: list[str] = []
+    entries = [(raw, False) for raw in tags] + \
+              [(raw, True) for raw in tags_free.replace("、", ",").split(",")]
+    for raw, free in entries:
+        if free:
+            t, cost, invalid = db.parse_tag_cost(raw)
+        else:
+            t, cost, invalid = db.normalize_tag(raw), None, False
+        if not t:
+            continue
+        if t not in tag_list:
             tag_list.append(t)
+        if cost is not None:
+            explicit[t] = cost
+        if invalid:
+            bad.append(raw.strip())
 
     # 没頭・散歩・苦しい夢・クラッシュはタグから立てる
     flags = db.flags_from_tags(tag_list)
@@ -135,7 +163,13 @@ def save_log(
         crash=flags["crash"],
         note=note.strip() or None,
     )
-    return RedirectResponse(url=f"/?d={target}", status_code=303)
+    # タグから消費MPを起こす（表の固定値・手入力）。これで日ごとの消費MPのグラフに載る
+    db.sync_form_activities(target, tag_list, explicit)
+
+    url = f"/?d={target}"
+    if bad:
+        url += "&bad=" + quote("、".join(bad))
+    return RedirectResponse(url=url, status_code=303)
 
 
 @app.get("/calendar")
@@ -148,11 +182,14 @@ def calendar(request: Request, months: int = Query(4, ge=1, le=24)):
 
 
 @app.get("/insights")
-def insights(request: Request, weeks: int = Query(8, ge=1, le=52)):
+def insights(request: Request,
+             weeks: int = Query(8, ge=1, le=52),
+             days: int = Query(14, ge=7, le=60)):
     return templates.TemplateResponse(
         request=request,
         name="insights.html",
         context={
+            "spend": db.daily_mp_spent_series(days),
             "summary": db.weekly_summary(weeks),
             "wake": db.wake_vs_mp(),
             "tags": db.tag_vs_mp(),

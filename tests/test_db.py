@@ -161,6 +161,112 @@ def test_fill_from_tags_is_idempotent(add_log, days_ago, monkeypatch):
     assert len(db.list_activities(day)) == 1
 
 
+# --------------------------------------------------- フォーム保存での消費MPの記録
+
+@pytest.mark.parametrize("raw, expected", [
+    ("面接:5", ("面接", 5, False)),
+    ("面接：５", ("面接", 5, False)),   # 全角の区切りと数字
+    ("散歩 = 1", ("散歩", 1, False)),
+    ("さんぽ:1", ("散歩", 1, False)),   # 表記ゆれも直す
+    ("読書", ("読書", None, False)),
+    ("ABC123", ("ABC123", None, False)),  # 区切りが無ければ数字もタグ名の一部
+])
+def test_parse_tag_cost(raw, expected):
+    assert db.parse_tag_cost(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["面接:7", "面接:0", "面接:abc", "面接:"])
+def test_parse_tag_cost_keeps_tag_but_flags_bad_cost(raw):
+    """範囲外は丸めずに捨てる（丸めると打ち間違いに気づけない）。タグは活かす。"""
+    assert db.parse_tag_cost(raw) == ("面接", None, True)
+
+
+@pytest.fixture
+def form_rows():
+    """その日の活動を (活動名, MP, source) の組で返す。"""
+    def _rows(day: str) -> list[tuple]:
+        return [(r["activity"], r["mp_cost"], r["source"]) for r in db.list_activities(day)]
+    return _rows
+
+
+def test_sync_form_activities_prefers_manual_then_table(days_ago, monkeypatch, form_rows):
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2, "運動": 3})
+    day = days_ago(0)
+
+    db.sync_form_activities(day, ["家事", "運動", "面接", "読書"], {"家事": 4, "面接": 5})
+
+    assert form_rows(day) == [("家事", 4, "web"), ("運動", 3, "table"), ("面接", 5, "web")], (
+        "手入力が表より優先。MPの分からないタグ（読書）は行を作らない"
+    )
+
+
+def test_sync_form_activities_removes_rows_for_dropped_tags(days_ago, monkeypatch, form_rows):
+    """書き足すのではなく揃える。タグを外せばその消費MPも消える。"""
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2, "運動": 3})
+    day = days_ago(0)
+    db.sync_form_activities(day, ["家事", "運動", "面接"], {"面接": 5})
+
+    db.sync_form_activities(day, ["運動"], {})
+
+    assert form_rows(day) == [("運動", 3, "table")]
+
+
+def test_sync_form_activities_is_idempotent(days_ago, monkeypatch, form_rows):
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2})
+    day = days_ago(0)
+    for _ in range(3):
+        db.sync_form_activities(day, ["家事", "面接"], {"面接": 5})
+    assert form_rows(day) == [("家事", 2, "table"), ("面接", 5, "web")]
+
+
+def test_sync_form_activities_never_touches_measured_rows(days_ago, monkeypatch, form_rows):
+    """実測がある活動は、手入力でも表でも上書きしない（実測を使う）。"""
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2})
+    day = days_ago(0)
+    db.add_activity(day, "掃除と洗濯", 4, tag="家事")
+    db.add_activity(day, "別の作業", 1)
+
+    db.sync_form_activities(day, ["家事"], {"家事": 1})
+
+    assert form_rows(day) == [("掃除と洗濯", 4, "session-close"), ("別の作業", 1, "session-close")]
+
+
+def test_sync_form_activities_skips_days_before_cutoff(days_ago, monkeypatch, form_rows):
+    """FORM_SYNC_SINCE より前の日は、編集しても過去の消費MPを変えない。"""
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2})
+    monkeypatch.setattr(db, "FORM_SYNC_SINCE", days_ago(0))
+    db.sync_form_activities(days_ago(1), ["家事"], {})
+    db.sync_form_activities(days_ago(0), ["家事"], {})
+    assert form_rows(days_ago(1)) == []
+    assert form_rows(days_ago(0)) == [("家事", 2, "table")]
+
+
+def test_add_activity_with_tag_replaces_form_rows(days_ago, monkeypatch, form_rows):
+    """実測が後から来たら、同じタグの表／手入力の行を消す（二重に数えない）。"""
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2, "運動": 3})
+    day = days_ago(0)
+    db.sync_form_activities(day, ["家事", "運動"], {})
+
+    db.add_activity(day, "掃除と洗濯", 4, tag="家事")
+    db.add_activity(day, "作業", 1)  # tag 無しでは何も消さない
+
+    assert form_rows(day) == [("運動", 3, "table"), ("掃除と洗濯", 4, "session-close"),
+                              ("作業", 1, "session-close")]
+
+
+def test_day_breakdown_totals_by_source(days_ago, monkeypatch):
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2})
+    day = days_ago(0)
+    db.add_activity(day, "作業", 3)
+    db.sync_form_activities(day, ["家事", "面接"], {"面接": 5})
+
+    out = db.day_breakdown(day)
+
+    assert out["totals"] == {"実測": 3, "手入力": 5, "表": 2}
+    assert out["total"] == 10
+    assert db.day_breakdown(days_ago(1))["total"] is None, "未記録は 0 ではなく None"
+
+
 # ------------------------------------------------------------------ 没頭の連続
 
 def test_hyperfocus_streak_counts_consecutive_days(add_log, days_ago):
@@ -231,6 +337,50 @@ def test_daily_mp_spent_is_newest_first(days_ago):
     db.add_activity(days_ago(2), "古い", 1)
     db.add_activity(days_ago(0), "新しい", 1)
     assert [r["date"] for r in db.daily_mp_spent(days=7)] == [days_ago(0), days_ago(2)]
+
+
+def test_daily_mp_spent_series_keeps_unrecorded_days_as_none(add_log, days_ago):
+    """グラフは暦の抜けを埋めるが、未記録を 0 の棒にしない。"""
+    add_log(days_ago(1), "safe")  # ログはあるが活動は未記録
+    db.add_activity(days_ago(0), "作業", 2)
+
+    out = db.daily_mp_spent_series(days=7)
+
+    assert len(out["days"]) == 7
+    assert out["days"][-1]["date"] == days_ago(0), "古い順"
+    assert out["days"][-2]["spent"] is None
+    assert out["logged"] == 1
+
+
+def test_daily_mp_spent_series_splits_excess_over_capacity(add_log, days_ago):
+    day = days_ago(0)
+    add_log(day, "caution")  # 残MP 7
+    db.add_activity(day, "重い作業", 5)
+    db.add_activity(day, "続きの作業", 4)
+
+    d = db.daily_mp_spent_series(days=7)["days"][-1]
+
+    assert (d["spent"], d["capacity"], d["over"]) == (9, 7, True)
+    assert (d["base"], d["excess"]) == (7, 2)
+
+
+def test_daily_mp_spent_series_splits_by_source(days_ago, monkeypatch):
+    """合計のうちどれだけが実測でないかを見分けられること。"""
+    monkeypatch.setattr(db, "TAG_MP_COSTS", {"家事": 2})
+    day = days_ago(0)
+    db.add_activity(day, "作業", 3)
+    db.sync_form_activities(day, ["家事", "面接"], {"面接": 5})
+
+    out = db.daily_mp_spent_series(days=7)
+    d = out["days"][-1]
+
+    assert (d["spent"], d["measured"], d["web"], d["table"]) == (10, 3, 5, 2)
+    assert out["table_share"] == 20
+
+
+def test_daily_mp_spent_series_on_empty_db():
+    out = db.daily_mp_spent_series(days=7)
+    assert (out["logged"], out["peak"], out["peak_date"], out["table_share"]) == (0, None, None, None)
 
 
 # ------------------------------------------------------------ 見積もりの答え合わせ

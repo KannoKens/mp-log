@@ -46,6 +46,49 @@
     .empty { color: var(--sub); font-size: .85rem; }
     .foot { margin-top: 10px; font-size: .74rem; color: var(--sub); }
 
+    /* 日ごとの消費MP（縦棒）。棒＝消費、細い横線＝その日の残MP */
+    .spend { display: grid; grid-template-columns: 20px 1fr; gap: 6px; }
+    .yaxis { position: relative; height: 150px; }
+    .yaxis span { position: absolute; right: 0; transform: translateY(50%);
+                  font-size: .66rem; color: var(--sub); font-variant-numeric: tabular-nums; }
+    .plot { position: relative; height: 150px; display: flex; align-items: flex-end; gap: 3px; }
+    .gridline { position: absolute; left: 0; right: 0; height: 1px; background: #efece6; }
+    .col { position: relative; flex: 1 1 0; height: 100%; }
+    .col .stack { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+                  width: 62%; max-width: 20px; display: flex; flex-direction: column;
+                  justify-content: flex-end; }
+    /* 下から 実測 → 手入力 → 表。信頼できる順に積み、表の固定値は斜線で「推定」と分かるようにする */
+    .col .seg + .seg { border-top: 1px solid var(--card); }
+    .col .seg:first-child { border-radius: 4px 4px 0 0; }
+    .seg.meas, i.meas { background: var(--accent); }
+    .seg.web, i.web   { background: #94c7bd; }
+    .seg.tbl, i.tbl   { background: repeating-linear-gradient(135deg, #d6d0c4 0 3px, #ece8e0 3px 6px); }
+    /* 残MPを超えた分。棒の色は出所に使っているので、棒の右に細い線で添える */
+    .col .overmark { position: absolute; width: 3px; border-radius: 2px; background: var(--lv-caution);
+                     left: calc(50% + min(31%, 10px) + 2px); }
+    .col .cap { position: absolute; left: 6%; right: 6%; height: 2px;
+                background: var(--sub); opacity: .5; }
+    .col .val { position: absolute; left: -4px; right: -4px; text-align: center;
+                font-size: .64rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .xaxis { display: flex; gap: 3px; margin-top: 5px; }
+    .xaxis div { flex: 1 1 0; text-align: center; font-size: .62rem; color: var(--sub);
+                 font-variant-numeric: tabular-nums; }
+    .xaxis div.is-today { color: var(--ink); font-weight: 700; }
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 14px;
+              font-size: .72rem; color: var(--sub); }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+                margin-right: 5px; vertical-align: 0; }
+    .legend i.key-line { height: 2px; width: 14px; border-radius: 0; background: var(--sub);
+                         opacity: .5; vertical-align: 4px; }
+    .tableview { margin-top: 12px; font-size: .76rem; }
+    .tableview summary { color: var(--accent); cursor: pointer; font-size: .74rem; }
+    .tableview table { width: 100%; border-collapse: collapse; margin-top: 8px;
+                       font-variant-numeric: tabular-nums; }
+    .tableview th, .tableview td { padding: 4px 2px; text-align: right; border-top: 1px solid #f0ede7; }
+    .tableview th:first-child, .tableview td:first-child { text-align: left; }
+    .tableview th { color: var(--sub); font-weight: 600; }
+    .tableview td.none { color: var(--sub); }
+
     .wk { display: grid; grid-template-columns: 92px 1fr auto; gap: 10px; align-items: center;
           padding: 9px 0; border-top: 1px solid #f0ede7; }
     .wk:first-child { border-top: none; }
@@ -69,6 +112,101 @@
       うち残MPの記入があるのは {{ stats.mp_days }}日。
     </p>
     {% endif %}
+
+    <h2>日ごとの消費MP</h2>
+    <p class="lead">
+      その日に記録した活動の消費MPの合計を、出所（実測／手入力／表の固定値）ごとに積んでいます。
+      細い横線はその日の残MP（4択の代表値）で、消費と同じ尺度なので重ねて読めます。
+      線を超えた分は棒の右に警告色の線で示します。
+    </p>
+    <div class="card">
+      {% if spend.logged %}
+      <div class="spend">
+        <div class="yaxis">
+          {% for t in spend.ticks %}
+          <span style="bottom: {{ (t / spend.scale * 100) | round(2) }}%">{{ t }}</span>
+          {% endfor %}
+        </div>
+        <div>
+          <div class="plot">
+            {% for t in spend.ticks %}
+            <div class="gridline" style="bottom: {{ (t / spend.scale * 100) | round(2) }}%"></div>
+            {% endfor %}
+            {% for d in spend.days %}
+            <div class="col" title="{{ d.label }}（{{ d.weekday }}）{% if d.spent is not none %}消費 {{ d.spent }}{% if d.n %}・{{ d.n }}件{% endif %}{% if d.minutes %}・{{ d.minutes }}分{% endif %}{% else %}消費の記録なし{% endif %}{% if d.capacity is not none %} ／ 残MP {{ d.capacity }}（{{ mp_levels[d.mp_level].label }}）{% endif %}">
+              {% if d.capacity is not none %}
+              <div class="cap" style="bottom: {{ (d.capacity / spend.scale * 100) | round(2) }}%"></div>
+              {% endif %}
+              {% if d.spent is not none %}
+              <div class="stack" style="height: {{ (d.spent / spend.scale * 100) | round(2) }}%">
+                {% for key, v in [("tbl", d.table), ("web", d.web), ("meas", d.measured)] if v %}
+                <div class="seg {{ key }}" style="height: {{ (v / d.spent * 100) | round(2) }}%"></div>
+                {% endfor %}
+              </div>
+              {% if d.excess %}
+              <div class="overmark" style="bottom: {{ (d.capacity / spend.scale * 100) | round(2) }}%;
+                   height: {{ (d.excess / spend.scale * 100) | round(2) }}%"></div>
+              {% endif %}
+              {% if d.date == spend.peak_date %}
+              <div class="val" style="bottom: calc({{ (d.spent / spend.scale * 100) | round(2) }}% + 3px)">{{ d.spent }}</div>
+              {% endif %}
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          <div class="xaxis">
+            {% for d in spend.days %}
+            <div class="{% if d.today %}is-today{% endif %}">{{ d.day }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span><i class="meas"></i>実測</span>
+        <span><i class="web"></i>手入力（タグ:MP）</span>
+        <span><i class="tbl"></i>表の固定値</span>
+        <span><i style="background: var(--lv-caution); width: 3px;"></i>⚠ 残MPを超えた分</span>
+        <span><i class="key-line"></i>その日の残MP</span>
+      </div>
+
+      <div class="foot">
+        {{ spend.days[0].label }}〜{{ spend.days[-1].label }}のうち、活動を記録したのは {{ spend.logged }}日。
+        平均 {{ spend.avg }}／最大 {{ spend.peak }}（{{ spend.peak_label }}）。
+        残MPを超えた日は {{ spend.over_days }}日です。
+        {% if spend.table_share %}消費のうち {{ spend.table_share }}% は表の固定値（実測ではない）です。{% endif %}
+        棒が無い日は<b>未記録</b>で、消費0の日ではありません（区別するため0で埋めていません）。
+      </div>
+
+      <details class="tableview">
+        <summary>数値で見る</summary>
+        <table>
+          <tr><th>日付</th><th>消費</th><th>実測</th><th>手入力</th><th>表</th><th>残MP</th><th>件数</th><th>分</th></tr>
+          {% for d in spend.days | reverse %}
+          <tr>
+            <td>{{ d.label }}（{{ d.weekday }}）</td>
+            {% if d.spent is not none %}
+            <td><b>{{ d.spent }}</b>{% if d.over %} ⚠{% endif %}</td>
+            <td>{{ d.measured or '' }}</td>
+            <td>{{ d.web or '' }}</td>
+            <td>{{ d.table or '' }}</td>
+            {% else %}
+            <td class="none">未記録</td><td></td><td></td><td></td>
+            {% endif %}
+            <td>{% if d.capacity is not none %}{{ d.capacity }}{% else %}<span class="none">—</span>{% endif %}</td>
+            <td>{{ d.n or '' }}</td>
+            <td>{{ d.minutes or '' }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </details>
+      {% else %}
+      <div class="empty">
+        活動ごとの消費MPがまだ記録されていません。入力画面でMPの分かるタグを付けて保存するか、
+        セッション終了時の記録（/session-close）で溜まっていきます。
+      </div>
+      {% endif %}
+    </div>
 
     <h2>週ごとの推移</h2>
     <p class="lead">
